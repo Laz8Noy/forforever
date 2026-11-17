@@ -138,6 +138,21 @@ export async function settingsPage(ctx: Context, _p: Record<string, string>, roo
     </div>
 
     <div class="settings-section">
+      <h4>诊断</h4>
+      <div class="card">
+        <div class="setting-row">
+          <div><div class="lbl">错误日志</div><div class="sub">仅元数据不含聊天内容 · 自动保留最近 500 条</div></div>
+          <button class="btn small" id="log-view">查看</button>
+        </div>
+        <div class="row mt">
+          <button class="btn small grow" id="log-export">导出日志</button>
+          <button class="btn small danger" id="log-clear">清空</button>
+        </div>
+        <p class="tiny mt">遇到问题时导出日志发给开发者即可定位；备份 zip 也包含日志。</p>
+      </div>
+    </div>
+
+    <div class="settings-section">
       <h4>关于</h4>
       <div class="card">
         <p class="muted">Forforever v0.1.0 · 长线陪伴，不再失忆</p>
@@ -297,6 +312,46 @@ export async function settingsPage(ctx: Context, _p: Record<string, string>, roo
       setTimeout(() => location.reload(), 800);
     } catch (e) {
       toast('备份文件无效：' + (e instanceof Error ? e.message : String(e)), 'err', 4000);
+    }
+  });
+
+  box.querySelector('#log-view')!.addEventListener('click', async () => {
+    const entries = (await ctx.diag.recent(100)).reverse();
+    await modal({
+      title: `诊断日志（最近 ${entries.length} 条）`,
+      html: entries.length
+        ? `<div style="max-height:50vh;overflow-y:auto;font-size:12px;line-height:1.7">${entries
+            .map(
+              (e) =>
+                `<div style="border-bottom:1px solid var(--border);padding:6px 0"><span class="badge ${e.level === 'error' ? '' : 'gray'}" style="${e.level === 'error' ? 'background:color-mix(in srgb, var(--danger) 15%, var(--card));color:var(--danger)' : ''}">${e.level}</span> <b>${esc(e.tag)}</b> <span class="tiny">${new Date(e.ts).toLocaleString()}</span><br>${esc(e.msg)}${e.meta ? `<br><span class="tiny">${esc(JSON.stringify(e.meta))}</span>` : ''}</div>`,
+            )
+            .join('')}</div>`
+        : '<p class="muted">暂无日志——一切正常。</p>',
+      hideCancel: true,
+      okText: '关闭',
+    });
+  });
+  box.querySelector('#log-export')!.addEventListener('click', async () => {
+    const entries = await ctx.diag.recent(500);
+    const text = entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
+    const fname = `forforever-logs-${new Date().toISOString().slice(0, 10)}.jsonl`;
+    if (Capacitor.isNativePlatform()) {
+      await Filesystem.writeFile({ path: fname, directory: Directory.Cache, data: text, encoding: Encoding.UTF8 });
+      const { uri } = await Filesystem.getUri({ path: fname, directory: Directory.Cache });
+      await Share.share({ title: 'Forforever 诊断日志', files: [uri] });
+    } else {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([text], { type: 'application/x-ndjson' }));
+      a.download = fname;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    }
+    toast('日志已导出', 'ok');
+  });
+  box.querySelector('#log-clear')!.addEventListener('click', async () => {
+    if (await confirm('清空日志', '确定清空全部诊断日志？', '清空', true)) {
+      await ctx.diag.clear();
+      toast('已清空', 'ok');
     }
   });
 

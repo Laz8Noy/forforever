@@ -28,6 +28,14 @@ export async function startUI(ctx: Context): Promise<void> {
 
   await applyAppearance(ctx);
 
+  // 全局兜底：未捕获异常与未处理 rejection 进诊断日志
+  window.addEventListener('error', (e) => {
+    ctx.diag.log('error', 'uncaught', e.message, { stack: e.error?.stack?.slice(0, 300) });
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    ctx.diag.log('error', 'unhandledrejection', e.reason?.message ?? e.reason);
+  });
+
   const pageRoot = document.getElementById('page')!;
   const router = new Router(ctx, pageRoot, (path) => {
     if (!store.settings.onboarded && path !== '/welcome') return '/welcome';

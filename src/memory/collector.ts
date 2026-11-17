@@ -218,6 +218,7 @@ export async function MemoryPlugin(ctx: Context): Promise<void> {
         if (!(e instanceof ApiError) || e.retryable) {
           state.diaryPending.push({ runId, transcript, highlights: highlights.join('\n'), createdAt: since });
           await store.saveCharState(charId, state);
+          await ctx.diag.log('warn', 'diary-pending', e, { charId, runId });
         }
       }
 
@@ -229,6 +230,7 @@ export async function MemoryPlugin(ctx: Context): Promise<void> {
       state.lastRun = { runId, status: 'failed', error: e instanceof Error ? e.message : String(e), at: now() };
       await store.saveCharState(charId, state).catch(() => {});
       status.lastError = `${char.name}：${state.lastRun.error}`;
+      await ctx.diag.log('error', 'memory', e, { charId, runId });
     } finally {
       status.current = null;
       emit();

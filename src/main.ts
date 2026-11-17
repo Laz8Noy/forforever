@@ -2,19 +2,21 @@ import './styles/app.css';
 import './core/events.ts';
 import { Context } from '@deepseek-ai/cordis';
 import { FFPlugin, StorePlugin } from './core/store.ts';
+import { LoggerPlugin } from './core/logger.ts';
 import { DeepSeekPlugin } from './api/deepseek.ts';
 import { MemoryPlugin } from './memory/collector.ts';
 import { startUI } from './ui/app.ts';
 
 const ctx = new Context();
 ctx.plugin(FFPlugin);
+ctx.inject(['ffs'], LoggerPlugin);
 ctx.inject(['ffs'], StorePlugin);
-ctx.inject(['store'], DeepSeekPlugin);
-ctx.inject(['ffs', 'store', 'deepseek'], MemoryPlugin);
-ctx.inject(['store', 'deepseek', 'memory'], (c) => startUI(c));
+ctx.inject(['store', 'diag'], DeepSeekPlugin);
+ctx.inject(['ffs', 'store', 'deepseek', 'diag'], MemoryPlugin);
+ctx.inject(['store', 'deepseek', 'memory', 'diag'], (c) => startUI(c));
 
 if (import.meta.env.DEV) {
-  ctx.inject(['ffs', 'store', 'deepseek', 'memory'], (c) => {
+  ctx.inject(['ffs', 'store', 'deepseek', 'memory', 'diag'], (c) => {
     (window as unknown as Record<string, unknown>).__ff = c;
   });
 }

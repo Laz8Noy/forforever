@@ -185,9 +185,14 @@ export async function DeepSeekPlugin(ctx: Context): Promise<void> {
     async complete(p, kind) {
       const key = store.secrets.apiKey;
       if (!key) throw new ApiError('尚未设置 API key', 'auth');
-      const r = await withRetry(() => rawComplete(p, key));
-      await logUsage(kind, p.model, r.usage, p.estPromptTokens);
-      return r;
+      try {
+        const r = await withRetry(() => rawComplete(p, key));
+        await logUsage(kind, p.model, r.usage, p.estPromptTokens);
+        return r;
+      } catch (e) {
+        await ctx.diag.log('error', 'api', e, { kind, model: p.model, status: (e as ApiError).status });
+        throw e;
+      }
     },
 
     stream(p, handlers) {
@@ -236,6 +241,7 @@ export async function DeepSeekPlugin(ctx: Context): Promise<void> {
             // 已输出的回复交给页面保留；重发会把两次生成拼在一起，还可能重复计费。
             if (receivedOutput || (e instanceof ApiError && !e.retryable)) throw e;
             console.warn('stream plugin failed, fallback', e);
+            await ctx.diag.log('warn', 'stream-fallback', e, { model: p.model, via: 'native' });
           }
         }
         if (!NATIVE && store.settings.streamEnabled) {
@@ -246,10 +252,12 @@ export async function DeepSeekPlugin(ctx: Context): Promise<void> {
             if (cancelled) return;
             if (receivedOutput || (e instanceof ApiError && !e.retryable)) throw e;
             console.warn('web stream failed, fallback', e);
+            await ctx.diag.log('warn', 'stream-fallback', e, { model: p.model, via: 'web' });
           }
         }
         await typewriterFallback(p, forward, ctl.isCancelled);
       })();
+      void work.catch((e) => ctx.diag.log('error', 'api-stream', e, { model: p.model }));
 
       return {
         cancel() {

@@ -88,6 +88,7 @@ async function apiFixture(DeepSeekPlugin, streamEnabled = true) {
       async saveSettings(patch) { Object.assign(this.settings, patch); },
     },
     provide(name, value) { this[name] = value; },
+    diag: { async log() {} },
   };
   await DeepSeekPlugin(ctx);
   return { api: ctx.deepseek, logs, store: ctx.store };
@@ -112,7 +113,7 @@ function memoryFixture(complete) {
       async diaryNames() { return [...diaries.keys()]; },
       async writeDiary(_, name, text) { diaries.set(name, text); },
     },
-    deepseek: { complete }, emit() {}, provide(name, value) { this[name] = value; },
+    deepseek: { complete }, emit() {}, provide(name, value) { this[name] = value; }, diag: { async log() {} },
   };
   return { ctx, messages, diaries, get state() { return state; }, get entries() { return entries; } };
 }
