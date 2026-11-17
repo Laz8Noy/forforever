@@ -244,5 +244,12 @@ export async function startUI(ctx: Context): Promise<void> {
   await ctx.memory.maybeAutoCollect().catch(() => {});
   await store.touchActive().catch(() => {});
 
+  // 引导页只应首启出现：已 onboarded 且非显式重看时，残留的 #/welcome hash 弹回首页
+  const replay = sessionStorage.getItem('ff-replay') === '1';
+  sessionStorage.removeItem('ff-replay');
+  if (store.settings.onboarded && router.current().startsWith('/welcome') && !replay) {
+    location.hash = '#/';
+  }
+
   await router.dispatch();
 }

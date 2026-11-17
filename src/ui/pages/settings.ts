@@ -185,7 +185,10 @@ export async function settingsPage(ctx: Context, _p: Record<string, string>, roo
     toast(r.ok ? '连接成功' : r.error ?? '连接失败', r.ok ? 'ok' : 'err', 4000);
   });
   box.querySelector('#open-platform')!.addEventListener('click', () => openPlatform());
-  box.querySelector('#tutorial')!.addEventListener('click', () => (location.hash = '#/welcome'));
+  box.querySelector('#tutorial')!.addEventListener('click', () => {
+    sessionStorage.setItem('ff-replay', '1');
+    location.hash = '#/welcome';
+  });
 
   box.querySelector('#theme-dark')!.addEventListener('change', async (e) => {
     await store.saveSettings({ theme: (e.target as HTMLInputElement).checked ? 'dark' : 'light' });

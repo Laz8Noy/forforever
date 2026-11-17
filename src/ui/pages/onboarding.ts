@@ -26,15 +26,20 @@ export async function onboardPage(ctx: Context, _p: Record<string, string>, root
         <div class="onboard-body">
           <div style="font-size:52px;text-align:center;margin:30px 0 18px">🌙</div>
           <h1 style="text-align:center">Forforever</h1>
-          <p style="text-align:center;font-size:15px">长线陪伴，不再失忆。</p>
+          <p style="text-align:center;font-size:15px">超长上下文，聊多久都记得。</p>
           <div class="card mt">
-            <p>官方 App 的上下文有限，聊久了 ta 就忘了你们的事。Forforever 直连 DeepSeek API，用<b>人物卡 + 长期记忆 + 私人日记</b>让每一段关系都能一直走下去。</p>
-            <p>· 所有数据只存在你的手机本地<br>· 离线 3 小时回来，ta 会默默整理好记忆和日记<br>· 上下文最大 1M，聊多久都不怕忘</p>
+            <p>直连 DeepSeek 官方 API，<b>1M 超长上下文</b>——约百万字的对话同时在线，远超官方 App 的窗口上限。</p>
+            <p>即使相伴日久、对话<b>超过上下文上限</b>，也有<b>两级长期记忆</b>兜底：你们的事被沉淀成本地文件，ta 记得你的偏好、你们的约定和关系进展，不会聊着聊着就忘了你。</p>
+            <p>· 所有数据只存在你的手机本地<br>· 离线 3 小时回来，ta 会默默整理记忆、写下一篇人设口吻的日记<br>· 人物卡 + 私人日记，让每一段关系都能一直走下去</p>
           </div>
           <p class="tiny">开始之前，需要你准备一个 DeepSeek API key（按量计费，聊天成本很低）。下一步有详细教程。</p>
         </div>
         ${dots()}
-        <div class="onboard-foot"><button class="btn primary block" id="next">开始设置</button></div>`;
+        <div class="onboard-foot">
+          ${store.settings.onboarded ? '<button class="btn" id="exit">返回首页</button>' : ''}
+          <button class="btn primary grow" id="next">开始设置</button>
+        </div>`;
+      page.querySelector('#exit')?.addEventListener('click', () => (location.hash = '#/'));
       page.querySelector('#next')!.addEventListener('click', () => {
         step = 1;
         render();
@@ -115,7 +120,9 @@ export async function onboardPage(ctx: Context, _p: Record<string, string>, root
         step = 1;
         render();
       });
-      nextBtn.addEventListener('click', () => {
+      nextBtn.addEventListener('click', async () => {
+        // key 配置成功即视为完成引导：中途退出不再重放欢迎页
+        await store.saveSettings({ onboarded: true });
         step = 3;
         render();
       });
