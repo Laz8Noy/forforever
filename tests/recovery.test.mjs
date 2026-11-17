@@ -85,11 +85,12 @@ async function apiFixture(DeepSeekPlugin, streamEnabled = true) {
     store: {
       settings: { streamEnabled, calibration: 1 }, secrets: { apiKey: 'sk-offline-test' },
       async appendUsage(log) { logs.push(log); },
+      async saveSettings(patch) { Object.assign(this.settings, patch); },
     },
     provide(name, value) { this[name] = value; },
   };
   await DeepSeekPlugin(ctx);
-  return { api: ctx.deepseek, logs };
+  return { api: ctx.deepseek, logs, store: ctx.store };
 }
 
 function memoryFixture(complete) {
@@ -266,6 +267,48 @@ test('Android 流式恢复', async (t) => {
     assert.equal(transport.listenerCount, 0);
   });
 
+  await t.test('原生流式请求启用 usage，末尾用量帧用于日志和校准', async (t) => {
+    let body;
+    t.mock.method(transport.stream, 'startStream', async (options) => {
+      body = JSON.parse(options.body);
+      return { id: 'stream-1' };
+    });
+    const { api, logs, store } = await apiFixture(DeepSeekPlugin);
+    const actualUsage = { prompt_tokens: 1000, completion_tokens: 50, prompt_cache_hit_tokens: 200 };
+    let receivedUsage;
+    let content = '';
+    const handle = api.stream({ ...params, estPromptTokens: 500 }, {
+      onContent: (text) => { content += text; }, onUsage: (value) => { receivedUsage = value; },
+    });
+    await tick();
+    transport.emit('chunk', { chunk: chunk({ content: '你好' }) +
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n' });
+    transport.emit('chunk', { chunk: 'data: ' + JSON.stringify({ choices: [], usage: actualUsage }) + '\n\ndata: [DONE]\n\n' });
+    transport.emit('end');
+    await within(handle.done);
+    assert.deepEqual(body.stream_options, { include_usage: true });
+    assert.equal(body.stream, true);
+    assert.equal(content, '你好');
+    assert.deepEqual(receivedUsage, actualUsage);
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0].promptTokens, 1000);
+    assert.equal(logs[0].completionTokens, 50);
+    assert.equal(logs[0].cacheHitTokens, 200);
+    assert.ok(Math.abs(store.settings.calibration - 1.2) < 1e-9);
+  });
+
+  await t.test('非流式请求不携带 stream_options', async (t) => {
+    let body;
+    t.mock.method(transport.http, 'post', async (options) => {
+      body = options.data;
+      return { status: 200, data: { choices: [{ message: { content: '完整回复' } }], usage } };
+    });
+    const { api } = await apiFixture(DeepSeekPlugin, false);
+    await within(api.stream(params, { onContent() {} }).done);
+    assert.equal(body.stream, false);
+    assert.equal(Object.hasOwn(body, 'stream_options'), false);
+  });
+
   for (const field of ['content', 'reasoning_content']) await t.test(`已有 ${field} 时中断不重发请求`, async () => {
     const { api } = await apiFixture(DeepSeekPlugin);
     const posts = transport.posts;
@@ -320,6 +363,33 @@ test('Android 流式恢复', async (t) => {
 
 test('Web 流式中断恢复', async (t) => {
   const { DeepSeekPlugin } = await services(t, false);
+  await t.test('Web 流式请求启用 usage 并接收 finish_reason 后的用量帧', async (t) => {
+    let body;
+    const actualUsage = { prompt_tokens: 1000, completion_tokens: 50, prompt_cache_hit_tokens: 200 };
+    t.mock.method(globalThis, 'fetch', async (_, options) => {
+      body = JSON.parse(options.body);
+      const frames = chunk({ content: '你好' }) +
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n' +
+        'data: ' + JSON.stringify({ choices: [], usage: actualUsage }) + '\n\ndata: [DONE]\n\n';
+      return new Response(frames, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    });
+    const { api, logs, store } = await apiFixture(DeepSeekPlugin);
+    let receivedUsage;
+    let content = '';
+    await within(api.stream({ ...params, estPromptTokens: 500 }, {
+      onContent: (text) => { content += text; }, onUsage: (value) => { receivedUsage = value; },
+    }).done);
+    assert.deepEqual(body.stream_options, { include_usage: true });
+    assert.equal(body.stream, true);
+    assert.equal(content, '你好');
+    assert.deepEqual(receivedUsage, actualUsage);
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0].promptTokens, 1000);
+    assert.equal(logs[0].completionTokens, 50);
+    assert.equal(logs[0].cacheHitTokens, 200);
+    assert.ok(Math.abs(store.settings.calibration - 1.2) < 1e-9);
+  });
+
   for (const field of ['content', 'reasoning_content']) await t.test(`已有 ${field} 时断网只发一次请求`, async (t) => {
     let requests = 0;
     t.mock.method(globalThis, 'fetch', async () => {

@@ -60,6 +60,7 @@ function buildPayload(p: ChatParams, stream: boolean): Record<string, unknown> {
     stream,
     thinking: { type: p.thinking.type },
   };
+  if (stream) body.stream_options = { include_usage: true };
   if (p.thinking.type === 'enabled') body.reasoning_effort = p.thinking.effort;
   if (p.responseFormat) body.response_format = { type: p.responseFormat };
   return body;
