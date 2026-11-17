@@ -35,27 +35,36 @@ declare module '@deepseek-ai/cordis' {
 const MIN_COLLECT_TOKENS = 200;
 
 interface Ops {
-  add?: { level?: string; type: MemoryType; content: string; importance?: number }[];
-  update?: { id: string; content?: string; importance?: number }[];
-  delete?: string[];
-}
-
-function parseOps(text: string): Ops {
-  let t = text.trim();
-  const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fence) t = fence[1].trim();
-  const start = t.indexOf('{');
-  const end = t.lastIndexOf('}');
-  if (start >= 0 && end > start) t = t.slice(start, end + 1);
-  const j = JSON.parse(t);
-  return {
-    add: Array.isArray(j.add) ? j.add : [],
-    update: Array.isArray(j.update) ? j.update : [],
-    delete: Array.isArray(j.delete) ? j.delete : [],
-  };
+  add: { level?: MemoryLevel; type: MemoryType; content: string; importance?: number }[];
+  update: { id: string; content?: string; importance?: number }[];
+  delete: string[];
 }
 
 const VALID_TYPES: MemoryType[] = ['fact', 'event', 'preference', 'relationship', 'emotion'];
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const nonemptyString = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
+const validImportance = (v: unknown): boolean => v === undefined || (typeof v === 'number' && Number.isFinite(v));
+
+function parseOps(text: string): Ops {
+  let t = text.trim();
+  const fence = t.match(/^```(?:json)?\s*([\s\S]*?)```\s*$/i);
+  if (fence) t = fence[1].trim();
+  try {
+    const j: unknown = JSON.parse(t);
+    if (
+      !isRecord(j) || !Array.isArray(j.add) || !Array.isArray(j.update) || !Array.isArray(j.delete) ||
+      !j.add.every((a: unknown) => isRecord(a) && nonemptyString(a.content) &&
+        VALID_TYPES.includes(a.type as MemoryType) &&
+        (a.level === undefined || a.level === 'user' || a.level === 'character') && validImportance(a.importance)) ||
+      !j.update.every((u: unknown) => isRecord(u) && nonemptyString(u.id) &&
+        (u.content === undefined || nonemptyString(u.content)) && validImportance(u.importance)) ||
+      !j.delete.every(nonemptyString)
+    ) throw new Error('invalid memory operations');
+    return j as unknown as Ops;
+  } catch {
+    throw new Error('记忆提炼结果格式无效，已保留对话等待重试');
+  }
+}
 
 export async function MemoryPlugin(ctx: Context): Promise<void> {
   const store: Store = ctx.store;
@@ -95,6 +104,9 @@ export async function MemoryPlugin(ctx: Context): Promise<void> {
   }
 
   async function writeDiaryEntry(charId: string, transcript: string, highlights: string, since: number, runId: string): Promise<void> {
+    // 同一分钟的不同收集互不覆盖；同一 run 重试也不会重复调用 API 或生成日记。
+    const suffix = `-${encodeURIComponent(runId)}.md`;
+    if ((await store.diaryNames(charId)).some((name) => name.endsWith(suffix))) return;
     const char = store.characters.get(charId)!;
     const r = await ds.complete(
       {
@@ -109,7 +121,7 @@ export async function MemoryPlugin(ctx: Context): Promise<void> {
       'diary',
     );
     const { date, h, m } = beijingParts(now());
-    const name = `${date}T${String(h).padStart(2, '0')}-${String(m).padStart(2, '0')}.md`;
+    const name = `${date}T${String(h).padStart(2, '0')}-${String(m).padStart(2, '0')}${suffix}`;
     const body = `---\ndate: ${date} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}\ncharId: ${charId}\nrunId: ${runId}\n---\n\n${r.content.trim()}\n`;
     await store.writeDiary(charId, name, body);
   }
@@ -163,12 +175,8 @@ export async function MemoryPlugin(ctx: Context): Promise<void> {
         },
         'memory',
       );
-      let ops: Ops = { add: [], update: [], delete: [] };
-      try {
-        ops = parseOps(r.content);
-      } catch {
-        /* 解析失败视为空操作，不污染记忆 */
-      }
+      // 解析或结构校验失败时整轮失败，不提交记忆、不推进游标。
+      const ops = parseOps(r.content);
       const highlights: string[] = [];
       const next = [...entries];
       for (const a of ops.add ?? []) {

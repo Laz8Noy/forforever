@@ -300,7 +300,12 @@ export async function chatPage(ctx: Context, params: Record<string, string>, roo
       }
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : '网络异常，请重试';
-      await finish(msg);
+      if (content || reasoning) {
+        await finish();
+        toast('回复中断，已保留收到的部分内容，可继续对话', 'err', 4000);
+      } else {
+        await finish(msg);
+      }
     }
   }
 

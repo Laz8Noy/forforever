@@ -192,53 +192,72 @@ export async function DeepSeekPlugin(ctx: Context): Promise<void> {
     stream(p, handlers) {
       const key = store.secrets.apiKey;
       let cancelled = false;
+      let receivedOutput = false;
       let cancelInner: () => void = () => {};
+      let resolveCancelled: () => void = () => {};
+      const cancellation = new Promise<void>((resolve) => { resolveCancelled = resolve; });
+      // 即使底层请求不能立即取消，也不再更新页面或阻塞下一轮对话。
+      const forward: StreamHandlers = {
+        onContent(text) {
+          if (cancelled) return;
+          if (text) receivedOutput = true;
+          handlers.onContent(text);
+        },
+        onReasoning(text) {
+          if (cancelled) return;
+          if (text) receivedOutput = true;
+          handlers.onReasoning?.(text);
+        },
+        onUsage(usage) {
+          if (!cancelled) handlers.onUsage?.(usage);
+        },
+      };
+      const ctl = {
+        isCancelled: () => cancelled,
+        setCancel(fn: () => void) {
+          cancelInner = fn;
+          if (cancelled) fn();
+        },
+      };
 
-      const done = (async () => {
+      const work = (async () => {
         if (!key) throw new ApiError('尚未设置 API key', 'auth');
         if (import.meta.env.DEV && key === 'sk-mock') {
-          await mockStream(p, handlers, () => cancelled);
+          await mockStream(p, forward, ctl.isCancelled);
           return;
         }
         if (NATIVE && store.settings.streamEnabled) {
           try {
-            await nativeStream(p, key, handlers, {
-              isCancelled: () => cancelled,
-              setCancel: (fn) => {
-                cancelInner = fn;
-              },
-            });
+            await nativeStream(p, key, forward, ctl);
             return;
           } catch (e) {
             if (cancelled) return;
-            // 流式插件失败 → 降级非流式 + 打字机
+            // 已输出的回复交给页面保留；重发会把两次生成拼在一起，还可能重复计费。
+            if (receivedOutput || (e instanceof ApiError && !e.retryable)) throw e;
             console.warn('stream plugin failed, fallback', e);
           }
         }
         if (!NATIVE && store.settings.streamEnabled) {
           try {
-            await webStream(p, key, handlers, {
-              isCancelled: () => cancelled,
-              setCancel: (fn) => {
-                cancelInner = fn;
-              },
-            });
+            await webStream(p, key, forward, ctl);
             return;
           } catch (e) {
             if (cancelled) return;
-            if (e instanceof ApiError && !e.retryable) throw e;
+            if (receivedOutput || (e instanceof ApiError && !e.retryable)) throw e;
             console.warn('web stream failed, fallback', e);
           }
         }
-        await typewriterFallback(p, handlers, () => cancelled);
+        await typewriterFallback(p, forward, ctl.isCancelled);
       })();
 
       return {
         cancel() {
+          if (cancelled) return;
           cancelled = true;
+          resolveCancelled();
           cancelInner();
         },
-        done,
+        done: Promise.race([work, cancellation]),
       };
     },
   };
@@ -255,26 +274,43 @@ export async function DeepSeekPlugin(ctx: Context): Promise<void> {
     let errBuf = '';
     let usage: Usage | undefined;
     let finished = false;
-    let fail: (e: Error) => void = () => {};
-
     const ended = new Promise<void>((resolve, reject) => {
-      fail = reject;
       const cleanupFns: (() => void)[] = [];
+      const cancelRequest = () => {
+        if (streamId) void StreamHttp.cancelStream({ id: streamId }).catch(() => {});
+      };
       const finish = (err?: Error) => {
         if (finished) return;
         finished = true;
         for (const fn of cleanupFns) fn();
-        if (err) reject(err);
-        else resolve();
+        if (err) {
+          cancelRequest();
+          reject(err);
+        } else resolve();
+      };
+      const track = (listener: { remove(): void | Promise<void> }) => {
+        const remove = () => {
+          try { void Promise.resolve(listener.remove()).catch(() => {}); } catch { /* 清理不阻塞结束 */ }
+        };
+        if (finished) remove();
+        else cleanupFns.push(remove);
       };
 
+      // 安卓插件取消后不会再发 end/error，必须在这里主动结束并清理监听器。
+      ctl.setCancel(() => {
+        cancelRequest();
+        finish();
+      });
+      if (ctl.isCancelled()) return;
+
       const reg = async () => {
-        const l1 = await StreamHttp.addListener('response', (ev) => {
-          if (ev.id !== streamId) return;
+        track(await StreamHttp.addListener('response', (ev) => {
+          if (finished || ev.id !== streamId) return;
           if (ev.status !== 200) errStatus = ev.status;
-        });
-        const l2 = await StreamHttp.addListener('chunk', (ev) => {
-          if (ev.id !== streamId || !ev.chunk) return;
+        }));
+        if (finished) return;
+        track(await StreamHttp.addListener('chunk', (ev) => {
+          if (finished || ev.id !== streamId || !ev.chunk) return;
           if (errStatus) {
             errBuf += ev.chunk;
             return;
@@ -290,43 +326,35 @@ export async function DeepSeekPlugin(ctx: Context): Promise<void> {
             if (d.reasoning) h.onReasoning?.(d.reasoning);
             if (d.content) h.onContent(d.content);
           }
-        });
-        const l3 = await StreamHttp.addListener('end', (ev) => {
-          if (ev.id !== streamId) return;
+        }));
+        if (finished) return;
+        track(await StreamHttp.addListener('end', (ev) => {
+          if (finished || ev.id !== streamId) return;
           if (errStatus) finish(mapApiError(errStatus, errBuf));
           else finish();
-        });
-        const l4 = await StreamHttp.addListener('error', (ev) => {
-          if (ev.id !== streamId) return;
+        }));
+        if (finished) return;
+        track(await StreamHttp.addListener('error', (ev) => {
+          if (finished || ev.id !== streamId) return;
           if (ctl.isCancelled()) finish();
           else finish(new ApiError(ev.error ?? '网络连接中断', 'network'));
-        });
-        cleanupFns.push(
-          () => l1.remove(),
-          () => l2.remove(),
-          () => l3.remove(),
-          () => l4.remove(),
-        );
+        }));
       };
 
-      reg()
-        .then(() =>
-          StreamHttp.startStream({
-            url: URL_CHAT,
-            method: 'POST',
-            headers: headers(key),
-            body: JSON.stringify(buildPayload(p, true)),
-            connectTimeoutMillis: 30000,
-          }),
-        )
-        .then(({ id }) => {
-          streamId = id;
-          ctl.setCancel(() => {
-            StreamHttp.cancelStream({ id }).catch(() => {});
-          });
-          if (ctl.isCancelled()) StreamHttp.cancelStream({ id }).catch(() => {});
-        })
-        .catch((e) => finish(new ApiError(String(e?.message ?? e), 'network')));
+      void (async () => {
+        await reg();
+        if (finished) return;
+        const { id } = await StreamHttp.startStream({
+          url: URL_CHAT,
+          method: 'POST',
+          headers: headers(key),
+          body: JSON.stringify(buildPayload(p, true)),
+          connectTimeoutMillis: 30000,
+        });
+        streamId = id;
+        // 取消可能发生在 startStream 返回 id 之前。
+        if (finished || ctl.isCancelled()) cancelRequest();
+      })().catch((e) => finish(new ApiError(String(e?.message ?? e), 'network')));
     });
 
     await ended;
@@ -344,6 +372,7 @@ export async function DeepSeekPlugin(ctx: Context): Promise<void> {
   ): Promise<void> {
     const ac = new AbortController();
     ctl.setCancel(() => ac.abort());
+    if (ctl.isCancelled()) return;
     const res = await fetch(URL_CHAT, {
       method: 'POST',
       headers: headers(key),
@@ -379,7 +408,10 @@ export async function DeepSeekPlugin(ctx: Context): Promise<void> {
   }
 
   async function typewriterFallback(p: ChatParams, h: StreamHandlers, isCancelled: () => boolean): Promise<void> {
-    const r = await withRetry(() => rawComplete(p, store.secrets.apiKey));
+    const r = await withRetry(() => {
+      if (isCancelled()) throw new DOMException('Aborted', 'AbortError');
+      return rawComplete(p, store.secrets.apiKey);
+    });
     await logUsage('chat', p.model, r.usage, p.estPromptTokens);
     if (isCancelled()) return;
     if (r.reasoning) h.onReasoning?.(r.reasoning);
