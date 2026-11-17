@@ -68,7 +68,7 @@ export async function settingsPage(ctx: Context, _p: Record<string, string>, roo
         </div>
         <div class="setting-row" style="display:block">
           <div class="lbl mb">背景遮罩浓度（保证文字可读）</div>
-          <input type="range" id="bg-dim" min="0.2" max="0.9" step="0.05" value="${store.settings.bgDim}" />
+          <input type="range" id="bg-dim" min="0.2" max="0.9" step="0.05" value="${esc(String(store.settings.bgDim))}" />
         </div>
         <input type="file" id="bg-file" accept="image/*" style="display:none" />
       </div>
@@ -233,7 +233,18 @@ export async function settingsPage(ctx: Context, _p: Record<string, string>, roo
   });
 
   box.querySelector('#export')!.addEventListener('click', async () => {
-    const includeKey = await confirm('导出备份', '是否把 API key 也包含在备份里？\n选「包含」请妥善保管备份文件。', '包含 key');
+    const native = Capacitor.isNativePlatform();
+    let includeKey = false;
+    if (native) {
+      await modal({
+        title: '导出备份',
+        body: 'API key 存放在安卓系统 Keystore 中，无法随备份导出。换机或重装后需要重新填写 key。\n其余数据（人物/对话/记忆/日记/设置）都会包含。',
+        hideCancel: true,
+        okText: '知道了，导出',
+      });
+    } else {
+      includeKey = await confirm('导出备份', '是否把 API key 也包含在备份里？\n选「包含」请妥善保管备份文件。', '包含 key');
+    }
     const files = await ctx.ffs.allFiles();
     const entries: Record<string, Uint8Array> = {};
     for (const f of files) {
@@ -271,7 +282,12 @@ export async function settingsPage(ctx: Context, _p: Record<string, string>, roo
       const unzipped = unzipSync(new Uint8Array(await f.arrayBuffer()));
       for (const [path, data] of Object.entries(unzipped)) {
         if (path.endsWith('/')) continue;
-        if (path === 'secrets.json' || path.endsWith('.json') || path.endsWith('.jsonl') || path.endsWith('.md')) {
+        if (path === 'secrets.json') {
+          const sec = JSON.parse(strFromU8(data)) as { apiKey?: string };
+          if (sec.apiKey) await store.setApiKey(sec.apiKey);
+          continue;
+        }
+        if (path.endsWith('.json') || path.endsWith('.jsonl') || path.endsWith('.md')) {
           await ctx.ffs.writeText(path, strFromU8(data));
         } else {
           await ctx.ffs.writeBlob(path, new Blob([data as BlobPart]));

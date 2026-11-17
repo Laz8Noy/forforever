@@ -35,7 +35,7 @@ export async function characterEditPage(ctx: Context, params: Record<string, str
   const previewUrl = avatarPath ? await store.imageUrl(avatarPath) : '';
   box.innerHTML = `
     <div class="card" style="text-align:center">
-      <div class="avatar lg" id="av-preview" style="margin:0 auto 10px">${previewUrl ? `<img src="${previewUrl}" />` : esc(name.slice(0, 1) || '?')}</div>
+      <div class="avatar lg" id="av-preview" style="margin:0 auto 10px">${previewUrl ? `<img src="${esc(previewUrl)}" />` : esc(name.slice(0, 1) || '?')}</div>
       <input type="file" id="av-file" accept="image/*" style="display:none" />
       <button class="btn small" id="av-pick">选择头像照片</button>
     </div>
@@ -77,7 +77,7 @@ export async function characterEditPage(ctx: Context, params: Record<string, str
     if (!f) return;
     avatarBlob = await imageToJpeg(f, 512);
     const url = URL.createObjectURL(avatarBlob);
-    box.querySelector('#av-preview')!.innerHTML = `<img src="${url}" />`;
+    box.querySelector('#av-preview')!.innerHTML = `<img src="${esc(url)}" />`;
   });
 
   box.querySelector('#save')!.addEventListener('click', async () => {

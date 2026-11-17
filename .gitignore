@@ -6,5 +6,7 @@ android/build/
 android/app/build/
 android/capacitor-cordova-android-plugins/build/
 android/local.properties
+android/keystore.properties
+android/forforever.keystore
 *.log
 .DS_Store

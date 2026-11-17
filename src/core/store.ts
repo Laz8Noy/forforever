@@ -1,4 +1,6 @@
 import { Context } from '@deepseek-ai/cordis';
+import { Capacitor } from '@capacitor/core';
+import { SecureStoragePlugin } from 'capacitor-secure-storage-plugin';
 import type { FF } from './fs.ts';
 import { createFF } from './fs.ts';
 import type {
@@ -52,11 +54,34 @@ export function FFPlugin(ctx: Context): Promise<void> {
 
 const emptyState = (): CharState => ({ lastCollectedAt: null, cursors: {}, diaryPending: [], lastRun: null });
 
+const NATIVE = Capacitor.isNativePlatform();
+
+// 安卓上 key 存系统 Keystore；secrets.json 仅作迁移来源与降级兜底
+async function readSecrets(ffs: FF): Promise<Secrets> {
+  const file = { apiKey: '', ...((await ffs.readJSON<Secrets>('secrets.json')) ?? {}) };
+  if (!NATIVE) return file;
+  try {
+    const { value } = await SecureStoragePlugin.get({ key: 'apiKey' });
+    if (value) return { apiKey: value };
+  } catch {
+    /* Keystore 不可用：降级文件 */
+  }
+  if (file.apiKey) {
+    try {
+      await SecureStoragePlugin.set({ key: 'apiKey', value: file.apiKey });
+      await ffs.remove('secrets.json');
+    } catch {
+      /* 迁移失败保留文件兜底 */
+    }
+  }
+  return file;
+}
+
 export async function StorePlugin(ctx: Context): Promise<void> {
   const ffs = ctx.ffs;
 
   const settings: Settings = { ...DEFAULT_SETTINGS, ...((await ffs.readJSON<Settings>('settings.json')) ?? {}) };
-  const secrets: Secrets = { apiKey: '', ...((await ffs.readJSON<Secrets>('secrets.json')) ?? {}) };
+  const secrets: Secrets = await readSecrets(ffs);
   const characters = new Map<string, Character>();
   const sessions = new Map<string, Session>();
   const msgCache = new Map<string, Message[]>();
@@ -90,6 +115,15 @@ export async function StorePlugin(ctx: Context): Promise<void> {
 
     async setApiKey(key) {
       secrets.apiKey = key.trim();
+      if (NATIVE) {
+        try {
+          await SecureStoragePlugin.set({ key: 'apiKey', value: secrets.apiKey });
+          await ffs.remove('secrets.json');
+          return;
+        } catch {
+          /* 降级文件存储 */
+        }
+      }
       await ffs.writeJSON('secrets.json', secrets);
     },
 

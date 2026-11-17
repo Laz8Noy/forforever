@@ -15,7 +15,7 @@
 - **对话控制**：思考强度 关/低/高/满（`thinking` + `reasoning_effort`）、模型 flash / v4-pro、上下文预算 32K–900K 可调
 - **外观**：浅色 / 深色主题、自定义照片背景（遮罩浓度可调，可读性优先）
 - **成本透明**：峰谷计价提示、每轮估算与实际费用、用量日志
-- **数据纯本地**：app 私有目录真实文件、原子写；备份导出 / 导入（zip）
+- **数据纯本地**：app 私有目录真实文件、原子写 + 崩溃恢复（.tmp 提升）、同路径串行写队列；API key 在安卓存系统 Keystore；`allowBackup=false` 杜绝 adb/云备份带走日记与 key；备份导出 / 导入（zip，安卓不含 key）
 - **首启引导**：API key 创建教程 + 一键直达 DeepSeek 开放平台 + 连接测试
 
 ## 技术栈
@@ -41,6 +41,8 @@ npm run typecheck
 ```bash
 bash scripts/install-toolchain.sh          # 一次性：JDK21 + SDK35 + build-tools（国内镜像，默认装 D 盘）
 bash scripts/build-apk.sh                  # web build → cap sync → assembleDebug → release/
+bash scripts/gen-keystore.sh               # 一次性：生成 release 签名密钥（产物已 gitignore）
+cd android && ./gradlew assembleRelease    # 混淆 + 资源压缩 + 正式签名的发布包
 ```
 工具链目录可用 `FF_TOOLCHAIN_WIN` / `FF_TOOLCHAIN_POSIX` 环境变量覆盖；Gradle 与 Maven 走腾讯 / 阿里云镜像，缓存全部落在工具链目录，不占 C 盘。
 产物为 debug 签名 APK，直接传手机安装（Android 6.0+）。安装与玩法见 [docs/安装说明.md](docs/安装说明.md)。

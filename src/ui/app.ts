@@ -207,7 +207,8 @@ export async function startUI(ctx: Context): Promise<void> {
 
   // ---------- 离线检测 / 活跃度 ----------
   const onAway = () => {
-    store.touchActive().catch(() => {});
+    // 先等排队写入落盘，再记录活跃时间
+    ctx.ffs.flush().catch(() => {}).then(() => store.touchActive().catch(() => {}));
   };
   const onBack = async () => {
     await ctx.memory.maybeAutoCollect().catch(() => {});
